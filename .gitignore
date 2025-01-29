@@ -1,0 +1,23 @@
+# Virtual Environment
+venv/
+env/
+.env/
+.venv/
+ENV/
+*.pyc
+__pycache__/
+
+# Project-specific
+uploads/
+database.db
+*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
