@@ -25,7 +25,7 @@ Example Usage:
             print(response.text) 
         else: 
             print(f"Request failed with status code: {response.status_code}")
-    ` 
+    
 
 ### 2. Upload CSV to Database
 Endpoint: `POST /upload`<br/>
