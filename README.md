@@ -14,8 +14,8 @@ As of January 29th, this API is not actively on an accessible machine. Thus, if 
 
 ## Endpoint Documentation 
 ### 1. Get table names 
-Endpoint: `GET /tables`\ 
-Description: Gets a list of all tables in database\
+Endpoint: `GET /tables`<br/> 
+Description: Gets a list of all tables in database<br/>
 Example Usage: 
     ` 
         import requests 
@@ -28,8 +28,8 @@ Example Usage:
     ` 
 
 ### 2. Upload CSV to Database
-Endpoint: `POST /upload`\
-Description: Uploads CSV to backend database\  
+Endpoint: `POST /upload`<br/>
+Description: Uploads CSV to backend database<br/>
 Example Usage: 
     `
         import requests
@@ -45,8 +45,8 @@ Example Usage:
     `
 
 ### 3. Download CSV From Database via Table name 
-Endpoint: `GET /table/<table_name>/download`\ 
-Description: Download CSV from database \
+Endpoint: `GET /table/<table_name>/download`<br/>
+Description: Download CSV from database <br/>
 Example Usage: 
     `
         import requests
