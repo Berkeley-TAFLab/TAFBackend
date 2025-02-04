@@ -17,7 +17,7 @@ As of January 29th, this API is not actively on an accessible machine. Thus, if 
 Endpoint: `GET /tables`<br/> 
 Description: Gets a list of all tables in database<br/>
 Example Usage: 
-    ` 
+     
         import requests 
         response = requests.get('http:127.0.0.1:5000/tables')
         
@@ -31,7 +31,7 @@ Example Usage:
 Endpoint: `POST /upload`<br/>
 Description: Uploads CSV to backend database<br/>
 Example Usage: 
-    `
+    
         import requests
         
         file_path = "data.csv"
@@ -42,13 +42,13 @@ Example Usage:
         print(response.status_code)
         print(response.json())
 
-    `
+    
 
 ### 3. Download CSV From Database via Table name 
 Endpoint: `GET /table/<table_name>/download`<br/>
 Description: Download CSV from database <br/>
 Example Usage: 
-    `
+    
         import requests
 
         response = requests.get("http://127.0.0.1:5000/table/<table_name>/download")
@@ -59,4 +59,4 @@ Example Usage:
             print("File downloaded successfully")
         else: 
             print("Error")
-    `
+    
