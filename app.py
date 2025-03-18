@@ -2,12 +2,10 @@ from flask import Flask, request, jsonify, send_file
 import pandas as pd
 import sqlite3
 import os
+import re
+from graphene import ObjectType, String, List, Schema, Argument
+from graphql_server.flask import GraphQLView
 from werkzeug.utils import secure_filename
-import logging
-
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -15,171 +13,151 @@ app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
 DATABASE = 'database.db'
 ALLOWED_EXTENSIONS = {'csv'}
-
-# Create uploads folder if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Initialize database
-def init_db():
-    conn = sqlite3.connect(DATABASE)
-    conn.close()
-    logger.info(f"Database initialized at {DATABASE}")
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# SQLite Connection
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
 
-@app.route('/upload', methods=['POST'])
-def upload_csv():
-    logger.debug("Upload request received")
-    logger.debug(f"Files in request: {request.files}")
-    
-    if 'file' not in request.files:
-        logger.error("No file part in request")
-        return jsonify({'error': 'No file part'}), 400
-    
-    file = request.files['file']
-    logger.debug(f"Received file: {file.filename}")
-    
-    if file.filename == '':
-        logger.error("No selected file")
-        return jsonify({'error': 'No selected file'}), 400
-    
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        table_name = os.path.splitext(filename)[0]
-        logger.debug(f"Processing file: {filename}, table name will be: {table_name}")
-        
-        # Save CSV temporarily
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
-        logger.debug(f"File saved temporarily to: {filepath}")
-        
-        try:
-            # Read CSV with pandas
-            logger.debug("Reading CSV with pandas")
-            df = pd.read_csv(filepath)
-            logger.debug(f"CSV read successfully, shape: {df.shape}")
-            
-            # Convert to SQL table
-            logger.debug("Converting to SQL table")
-            conn = get_db_connection()
-            df.to_sql(table_name, conn, if_exists='replace', index=True, index_label='id')
-            conn.close()
-            logger.info(f"Table {table_name} created successfully")
-            
-            return jsonify({
-                'message': 'File uploaded and converted successfully',
-                'table_name': table_name,
-                'rows': len(df)
-            })
-            
-        except Exception as e:
-            logger.error(f"Error processing file: {str(e)}", exc_info=True)
-            return jsonify({'error': str(e)}), 500
-        
-        finally:
-            # Clean up the temporary CSV file
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                logger.debug(f"Temporary file removed: {filepath}")
-    
-    logger.error("Invalid file type")
-    return jsonify({'error': 'Invalid file type'}), 400
-
-@app.route('/tables', methods=['GET'])
-def list_tables():
-    logger.debug("Listing tables")
+# Initialize database and create large_table if it doesn't exist
+def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Get all table names
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = cursor.fetchall()
-    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS large_table (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        origin_file TEXT
+    )
+    ''')
+    conn.commit()
     conn.close()
-    logger.debug(f"Found tables: {[table['name'] for table in tables]}")
-    return jsonify({'tables': [table['name'] for table in tables]})
 
-@app.route('/table/<table_name>', methods=['GET'])
-def get_table_data(table_name):
-    try:
-        conn = get_db_connection()
-        # Read the entire table into a pandas DataFrame
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-        conn.close()
-        
-        return jsonify(df.to_dict(orient='records'))
+# Function to sanitize column names
+def sanitize_column_name(name):
+    name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+    return name.strip('_')
+
+# Function to add missing columns dynamically with sanitized names
+def add_missing_columns(conn, df):
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(large_table)")
+    existing_columns = {col[1] for col in cursor.fetchall()}
     
+    sanitized_columns = {sanitize_column_name(col) for col in df.columns}
+    new_columns = sanitized_columns - existing_columns
+    
+    for col in new_columns:
+        print(f"Adding missing column: {col}")
+        cursor.execute(f"ALTER TABLE large_table ADD COLUMN {col} TEXT")
+    
+    conn.commit()
+
+# Upload CSV endpoint
+@app.route('/upload', methods=['POST'])
+def upload_csv():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['file']
+    if file.filename == '' or not file.filename.endswith('.csv'):
+        return jsonify({'error': 'Invalid file type'}), 400
+
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    try:
+        df = pd.read_csv(filepath)
+        df.columns = [sanitize_column_name(col) for col in df.columns]
+        df['origin_file'] = filename
+        
+        conn = get_db_connection()
+        add_missing_columns(conn, df)
+        df.to_sql('large_table', conn, if_exists='append', index=False)
+        conn.close()
+        os.remove(filepath)
+        
+        return jsonify({'message': 'File uploaded successfully', 'rows': len(df)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/table/<table_name>/<int:row_id>', methods=['GET'])
-def get_row(table_name, row_id):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Get specific row by ID
-        cursor.execute(f"SELECT * FROM {table_name} WHERE id = ?", (row_id,))
-        row = cursor.fetchone()
-        
-        if row is None:
-            return jsonify({'error': 'Row not found'}), 404
-        
-        # Convert row to dictionary
-        columns = [description[0] for description in cursor.description]
-        result = dict(zip(columns, row))
-        
-        conn.close()
-        return jsonify(result)
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+# List unique sources
+@app.route('/sources', methods=['GET'])
+def list_sources():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT origin_file FROM large_table")
+    sources = [row['origin_file'] for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({'sources': sources})
 
-@app.route('/table/<table_name>/download', methods=['GET'])
-def download_table(table_name):
-    try:
-        conn = get_db_connection()
-        
-        # Read the table into a pandas DataFrame
-        df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-        conn.close()
-        
-        # Save to temporary CSV file
-        temp_csv = os.path.join(UPLOAD_FOLDER, f'{table_name}.csv')
-        df.to_csv(temp_csv, index=False)
-        
-        # Send the file
-        return send_file(
-            temp_csv,
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name=f'{table_name}.csv'
-        )
+# Download CSV by origin_file
+@app.route('/download/<origin_file>', methods=['GET'])
+def download_source(origin_file):
+    conn = get_db_connection()
+    df = pd.read_sql_query("SELECT * FROM large_table WHERE origin_file = ?", conn, params=(origin_file,))
+    conn.close()
     
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    if df.empty:
+        return jsonify({'error': 'No data found for this source'}), 404
+    
+    temp_csv = os.path.join(UPLOAD_FOLDER, f'{origin_file}.csv')
+    df.to_csv(temp_csv, index=False)
+    return send_file(temp_csv, mimetype='text/csv', as_attachment=True)
 
-@app.route('/table/<table_name>', methods=['DELETE'])
-def delete_table(table_name):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Drop the table
-        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
-        conn.commit()
-        conn.close()
-        
-        return jsonify({'message': f'Table {table_name} deleted successfully'})
+# Delete data by origin_file
+@app.route('/delete/<origin_file>', methods=['DELETE'])
+def delete_source(origin_file):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM large_table WHERE origin_file = ?", (origin_file,))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': f'Data from {origin_file} deleted successfully'})
+
+# Dynamically generate GraphQL schema on each request with filtering
+@app.route('/graphql', methods=['POST'])
+def graphql():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(large_table)")
+    columns = [col[1] for col in cursor.fetchall()]
+    conn.close()
     
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    # Use original column names with underscores
+    fields = {col: String() for col in columns}
+    filter_args = {col: Argument(String) for col in columns}
+    
+    # Create GraphQL ObjectType with snake_case field names
+    DynamicRow = type('DynamicRow', (ObjectType,), fields)
+    
+    class Query(ObjectType):
+        data = List(DynamicRow, **filter_args)
+        
+        def resolve_data(self, info, **kwargs):
+            conn = get_db_connection()
+            query = "SELECT * FROM large_table"
+            conditions = []
+            params = []
+            
+            for col, value in kwargs.items():
+                conditions.append(f"{col} = ?")
+                params.append(value)
+                
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+                
+            # Ensure the correct number of bindings are supplied
+            df = pd.read_sql_query(query, conn, params=params)
+            conn.close()
+            return [DynamicRow(**row) for row in df.to_dict(orient='records')]
+    
+    schema = Schema(query=Query, auto_camelcase=False)  # Disable auto-camelcase
+    view = GraphQLView.as_view('graphql', schema=schema, graphiql=True)
+    return view()
 
 if __name__ == '__main__':
     init_db()
