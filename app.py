@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 import pandas as pd
 import sqlite3
 import os
@@ -9,7 +9,7 @@ from graphene import ObjectType, String, List, Schema, Argument
 from graphql_server.flask import GraphQLView
 from werkzeug.utils import secure_filename
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder = 'build',template_folder='build')
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -82,9 +82,14 @@ def validate_table(table_name):
 def get_upload_dir(table_name):
     return VALID_TABLES.get(table_name) 
 
-@app.route('/')
-def landing(): 
-    return "TAFLab Database API. User other endpoints to interact with database."
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    if path != "" and os.path.exists(app.static_folder + '/' + path):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
+
 
 # List all valid tables endpoint
 @app.route('/tables', methods=['GET'])
@@ -274,4 +279,4 @@ def graphql(table_name):
 
 if __name__ == '__main__':
     init_db()
-    app.run(debug=True)
+    app.run(debug=True, host='127.0.0.1',port=5000)
